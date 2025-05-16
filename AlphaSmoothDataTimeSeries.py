@@ -1,0 +1,771 @@
+'''
+    Calculate Alpha from Carrier Smoothing
+    Data smoothed export from Receiver
+'''
+import os
+import pandas as pd
+import numpy as np
+import re
+import math
+import matplotlib.pyplot as plt
+
+from datetime import datetime, timedelta
+
+list_satellite = ['G01', 'G02', 'G03', 'G04','G05', 'G06', 'G07', 'G08', 'G09', 'G10', 
+                  'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G17', 'G18', 'G19', 'G20', 
+                  'G21', 'G22', 'G23', 'G24', 'G25', 'G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32']
+
+# Tọa độ bộ thu trong hệ ECEF (Đã biết)
+receiver_ecef = np.array([-1626584.7059, 5730519.4577, 2271864.3917])
+
+# Constants
+mu = 3.986005e14  # Earth's gravitational constant (m^3/s^2)
+omega_e = 7.2921151467e-5  # Earth's rotation rate (rad/s)
+
+LINE_COUNT = 20000
+c = 299792458
+SMOOTH_WINDOW = 300
+
+IS_CLOCK = 0
+if IS_CLOCK == 0: 
+    DATA_TYPE = 'NOCLOCK'
+    # No Clock
+    FOLDER_PATH = './Pseudorange_smooth_internal_clock_rx/'  # Đường dẫn tới file 1
+    # file1 = 'F:\\PhDStudy\\Data\\Pseudorange_smooth_internal_clock\\89683563\\IGS000USA_R_20243560229_01D_01S_MO.rnx'  # Đường dẫn tới file 1
+    # file2 = 'F:\\PhDStudy\\Data\\Pseudorange_smooth_internal_clock\\96813563\\96813563.24O'  # Đường dẫn tới file 2
+    # file1 = 'Data_Clock_Smooth\Pseudorange_smooth_internal_clock\89683563\IGS000USA_R_20243560229_01D_01S_MO.rnx'  # Đường dẫn tới file 1
+    # file2 = 'Data_Clock_Smooth\Pseudorange_smooth_internal_clock\96813563\96813563.24O'  # Đường dẫn tới file 2
+    file1 = 'RX\RX1\RinexObservables_20180216_082105_Rx1_125dBm.obs'  # Đường dẫn tới file 1
+    file2 = 'RX\RX2\RinexObservables_20180216_082103_Rx2_125dBm.obs'  # Đường dẫn tới file 2
+    NORMALIZE_VALUE = 0
+else:
+    DATA_TYPE = 'CLOCK'
+    # Clock
+    FOLDER_PATH = './Pseudorange_smooth_external_clock/'  # Đường dẫn tới file 2
+    # file1 = "F:\\PhDStudy\\Data\\Pseudorange_smooth_external_clock\\89683562\\IGS000USA_R_20243560202_01D_01S_MO.rnx"
+    # file2 = "F:\\PhDStudy\\Data\\Pseudorange_smooth_external_clock\\96813562\\96813562.24O"
+    file1 = "Data_Clock_Smooth\Pseudorange_smooth_external_clock\89683562\IGS000USA_R_20243560202_01D_01S_MO.rnx"
+    file2 = "Data_Clock_Smooth\Pseudorange_smooth_external_clock\96813562\96813562.24O"
+    NORMALIZE_VALUE = 85897
+    
+D_rx1_rx2 = 3.0 # mét
+
+# Leap seconds giữa GPS Time và UTC (18 giây tính đến năm 2024)
+GPS_UTC_LEAP_SECONDS = 18 
+def compute_dt_seconds(t_rx_utc_str):
+    # Chuyển string sang datetime UTC
+    t_rx_utc = datetime.strptime(t_rx_utc_str, "%Y %m %d %H %M %S.%f")
+
+    # Chuyển t_rx từ UTC sang GPS Time
+    t_rx_gps = t_rx_utc + timedelta(seconds=GPS_UTC_LEAP_SECONDS)
+
+    # Xác định ngày đầu tuần GPS (Chủ Nhật trước đó)
+    w_start = t_rx_gps - timedelta(days=t_rx_gps.weekday() + 1)
+    gps_week_start = datetime(w_start.year, w_start.month, w_start.day, 0, 0, 0)
+    # Chuyển thời điểm thu tín hiệu sang giây của tuần GPS (TOE format)
+    t_rx_toe = (t_rx_gps - gps_week_start).total_seconds()
+
+    return {
+        "t_rx_utc": t_rx_utc,
+        "t_rx_gps": t_rx_gps,
+        "gps_week_start": gps_week_start,
+        "t_rx_toe": t_rx_toe,
+    }
+
+def solve_kepler(M, e, tolerance=1e-10):
+    """ Solve Kepler's Equation for E (Eccentric Anomaly). """
+    E = M  # Initial guess
+    while True:
+        E_new = E + (M - E + e * np.sin(E)) / (1 - e * np.cos(E))
+        if abs(E_new - E) < tolerance:
+            break
+        E = E_new
+    return E
+
+# Function to convert ECEF to geodetic coordinates
+def ecef_to_geodetic(x, y, z):
+    """
+    Convert ECEF coordinates to geodetic (latitude, longitude, height).
+
+    Args:
+        x, y, z (float): ECEF coordinates.
+
+    Returns:
+        tuple: Latitude (degrees), Longitude (degrees), Height (meters).
+    """
+    a = 6378137.0
+    e2 = 6.69437999014e-3
+    lon = np.arctan2(y, x)
+    p = np.sqrt(x**2 + y**2)
+    lat = np.arctan2(z, p * (1 - e2))
+    for _ in range(5):
+        N = a / np.sqrt(1 - e2 * np.sin(lat)**2)
+        h = p / np.cos(lat) - N
+        lat = np.arctan2(z, p * (1 - e2 * N / (N + h)))
+    return np.degrees(lat), np.degrees(lon), h
+
+# Function to calculate satellite ECEF coordinates
+def calculate_satellite_ecef(parameters, t):
+    """
+    Calculate satellite ECEF coordinates from orbital parameters.
+
+    Args:
+        parameters (list): Orbital parameters from NAV RINEX.
+        t (float): Time since ephemeris reference epoch.
+
+    Returns:
+        tuple: ECEF coordinates (x, y, z).
+    """
+    sqrtA = parameters[7]
+    e = parameters[5]
+    M0 = parameters[3]
+    omega = parameters[14]
+    OMEGA0 = parameters[10]
+    i0 = parameters[12]
+    Delta_n = parameters[2]
+    OMEGA_DOT = parameters[15]
+    Toe = parameters[8]
+
+    A = sqrtA**2
+    n0 = np.sqrt(mu / A**3)
+    n = n0 + Delta_n
+    t_corr = t - Toe
+    M = M0 + n * t_corr
+
+    E = solve_kepler(M % (2 * np.pi), e)
+    v = np.arctan2(np.sqrt(1 - e**2) * np.sin(E), np.cos(E) - e)
+    phi = v + omega
+
+    r = A * (1 - e * np.cos(E))
+    x_orb = r * np.cos(phi)
+    y_orb = r * np.sin(phi)
+
+    OMEGA_corrected = OMEGA0 + (OMEGA_DOT - omega_e) * t_corr - omega_e * t
+
+    x_ecef = x_orb * np.cos(OMEGA_corrected) - y_orb * np.cos(i0) * np.sin(OMEGA_corrected)
+    y_ecef = x_orb * np.sin(OMEGA_corrected) + y_orb * np.cos(i0) * np.cos(OMEGA_corrected)
+    z_ecef = y_orb * np.sin(i0)
+
+    return x_ecef, y_ecef, z_ecef
+
+# Function to calculate azimuth and elevation
+def calculate_azimuth_elevation(sat_pos, receiver_pos):
+    """
+    Calculate azimuth and elevation angles between satellite and receiver.
+
+    Args:
+        sat_pos (list): Satellite position in ECEF [X, Y, Z].
+        receiver_pos (list): Receiver position in ECEF [X, Y, Z].
+
+    Returns:
+        tuple: Azimuth (degrees), Elevation (degrees).
+    """
+    sat_pos = np.array(sat_pos)
+    receiver_pos = np.array(receiver_pos)
+    los_vector = sat_pos - receiver_pos
+    
+    euclid_dis = np.linalg.norm(los_vector)
+    
+    los_unit = los_vector / euclid_dis
+    lat, lon, _ = ecef_to_geodetic(*receiver_pos)
+    lat, lon = np.radians(lat), np.radians(lon)
+    transform_matrix = np.array([
+        [-np.sin(lon), np.cos(lon), 0],
+        [-np.cos(lon) * np.sin(lat), -np.sin(lon) * np.sin(lat), np.cos(lat)],
+        [np.cos(lon) * np.cos(lat), np.sin(lon) * np.cos(lat), np.sin(lat)],
+    ])
+    los_enu = np.dot(transform_matrix, los_unit)
+    azimuth = np.degrees(np.arctan2(los_enu[0], los_enu[1]))
+    elevation = np.degrees(np.arcsin(los_enu[2]))
+    if azimuth < 0:
+        azimuth += 360
+        
+    # tinh goc alpha 
+    # cos alpha = -(cos Az) * (cos El)
+    cos_alpha = - (math.cos(azimuth) * math.cos(elevation))
+    alpha_angle = math.degrees(math.acos(cos_alpha))
+    
+    return azimuth, elevation, alpha_angle
+
+# Function to parse NAV RINEX file
+def parse_nav_rinex(nav_file):
+    """
+    Parse satellite orbital parameters from NAV RINEX file.
+
+    Args:
+        nav_file (str): Path to NAV RINEX file.
+
+    Returns:
+        list: List of satellite data with orbital parameters.
+    """
+    satellite_data = []
+    with open(nav_file, 'r') as file:
+        reading_data = False
+        current_satellite = None
+
+        for line in file:
+            if "END OF HEADER" in line:
+                reading_data = True
+                continue
+
+            if reading_data:
+                if line.startswith('G'):  # Start of new satellite data
+                    if current_satellite:
+                        satellite_data.append(current_satellite)
+
+                    current_satellite = {
+                        "PRN": line[:3].strip(),
+                        "epoch": re.split(r'\s+', line[3:23].strip()),
+                        "parameters": []
+                    }
+                elif current_satellite:
+                    values = line.split()
+                    if values:
+                        current_satellite["parameters"].extend(
+                            [float(v.replace('D', 'E')) for v in values]
+                        )
+        if current_satellite:
+            satellite_data.append(current_satellite)
+
+    return satellite_data
+
+from datetime import datetime, timedelta
+
+def cal2gpstime(date_str: str):
+    """
+    Chuyển đổi thời gian dương lịch (UTC) dạng chuỗi sang GPS week và GPS seconds.
+
+    Args:
+        date_str (str): Chuỗi định dạng "YYYY MM DD HH MM SS.sss"
+        
+    Returns:
+        tuple: (gps_week, gps_seconds)
+    """
+    # GPS epoch bắt đầu từ ngày 06/01/1980
+    gps_epoch = datetime(1980, 1, 6, 0, 0, 0)
+
+    # Chuyển đổi chuỗi đầu vào thành datetime
+    dt = datetime.strptime(date_str, "%Y %m %d %H %M %S.%f")
+
+    # Số giây từ epoch đến thời điểm hiện tại
+    delta_seconds = (dt - gps_epoch).total_seconds()
+
+    # Tính tuần GPS và số giây trong tuần
+    gps_week = int(delta_seconds // 604800)  # Một tuần có 604800 giây
+    gps_seconds = round(delta_seconds % 604800, 3)  # Làm tròn đến 3 chữ số thập phân
+
+    return gps_week, gps_seconds
+
+
+
+
+
+
+def read_rinex_observation2(file_path, isClock):
+    
+    """
+    Đọc file RINEX và trích xuất dữ liệu cần thiết.
+    Trả về DataFrame chứa: thời gian (epoch), số hiệu vệ tinh, và pseudorange.
+    """
+    data = []
+    reading_data = False
+    epoch_time = ''
+    clock_bias = 0
+    count_line = 0
+    with open(file_path, 'r') as file:
+        lines = file.readlines()[200:LINE_COUNT]
+        for line in lines:
+
+            if line.startswith('>'):  # Epoch bắt đầu bằng ký tự '>'
+                epoch_time = line[1:25].strip()  # Lấy thời gian epoch
+                
+                parts = line.split()
+                clock_bias = parts[9]
+                # rxClockOffset = float(clock_bias)
+
+            if not reading_data:
+                if line.startswith('>'):  # Epoch bắt đầu bằng ký tự '>'
+                    reading_data = True
+            else:
+                if line.strip() == '':
+                    continue
+
+                # Split dong bang khoang trang hoac tab
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+
+                satellite_id = parts[0]  # Lấy số hiệu vệ tinh
+                if satellite_id in list_satellite:
+                    pseudorange = parts[1]  # Lấy pseudorange
+                    #carrier_phase_str = parts[3] # lay carrier phase
+                    carrier_phase_str = line[21:34]
+                    if carrier_phase_str.isspace():
+                        carrier_phase = 0
+                    else:
+                        carrier_phase = float(carrier_phase_str)
+
+                    if pseudorange and carrier_phase != 0:
+                        if isClock == 1:
+                            newPseudorange = float(pseudorange)
+                        else:
+                            # newPseudorange = float(pseudorange) - (c * float(rxClockOffset))
+                            newPseudorange = float(pseudorange) - (c * float(float(clock_bias)))
+                            # newPseudorange = float(pseudorange) - (c*float(clock_bias))
+                        data.append((epoch_time, satellite_id, newPseudorange, carrier_phase))
+    return pd.DataFrame(data, columns=['epoch', 'PRN', 'pseudorange', 'carrier_phase'])
+
+
+
+def read_rinex_observation(file_path, isClock):
+    
+    """
+    Đọc file RINEX và trích xuất dữ liệu cần thiết.
+    Trả về DataFrame chứa: thời gian (epoch), số hiệu vệ tinh, và pseudorange.
+    """
+    doppler = 0
+    prev_carrier_phase = {}  # Lưu giá trị carrier_phase của mỗi vệ tinh tại epoch trước
+    prev_gps_seconds = {}  # Lưu giá trị gps_seconds của mỗi vệ tinh tại epoch trước
+
+    L1 = 1575.42e6
+    LAMBDA_L1 = c / L1
+    data = []
+    reading_data = False
+    epoch_time = ''
+    clock_bias = 0
+    count_line = 0
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+        for line in lines:
+            # Kiểm tra nếu dòng bắt đầu bằng '>', nghĩa là bắt đầu một epoch
+            if line.startswith('>'):
+                epoch_time = line[1:25].strip()  # Lấy thời gian epoch (thời gian quan sát)
+                _, gps_seconds = cal2gpstime(epoch_time) 
+                
+                parts = line.split()
+                # Đảm bảo rằng dòng có đủ phần tử trước khi lấy clock_bias
+                if len(parts) > 9:
+                    clock_bias = parts[9]
+                    # rxClockOffset = float(clock_bias)
+                else:
+                    clock_bias = 0  # Nếu không có clock_bias, gán giá trị mặc định
+                    
+
+            if not reading_data:
+                if line.startswith('>'):
+                    reading_data = True  # Bắt đầu đọc dữ liệu sau khi gặp dấu '>'
+            else:
+                if line.strip() == '':
+                    continue  # Bỏ qua các dòng trống
+
+                # Split dòng bằng khoảng trắng hoặc tab
+                parts = line.split()
+                if len(parts) < 2:
+                    continue  # Bỏ qua các dòng không đủ dữ liệu
+
+                satellite_id = parts[0]  # Lấy số hiệu vệ tinh
+                if satellite_id in list_satellite:
+                    pseudorange = parts[1]  # Lấy pseudorange
+                    # Carrier phase có thể nằm trong các vị trí khác nhau, cần phải xử lý cẩn thận
+                    carrier_phase_str = line[21:34].strip()
+                    if carrier_phase_str.isspace():
+                        carrier_phase = 0
+                    else:
+                        carrier_phase = float(carrier_phase_str)
+                        
+
+                    # Điều chỉnh pseudorange nếu là clock bias
+                    if pseudorange and carrier_phase != 0:
+                        if isClock == 1:
+                            newPseudorange = float(pseudorange)
+                        else:
+                            # newPseudorange = float(pseudorange) - (c * float(clock_bias))
+                            # newPseudorange = float(pseudorange) - (c * float(rxClockOffset))
+                            newPseudorange = float(pseudorange) - (c * float(-float(clock_bias)))
+
+                        new_epoch = gps_seconds - (- float(clock_bias))
+
+                        # Tính doppler (bằng chênh lệch carrier_phase giữa 2 epoch)
+                        if satellite_id in prev_carrier_phase:
+                            delta_phase = carrier_phase - prev_carrier_phase[satellite_id]
+                            delta_time = gps_seconds - prev_gps_seconds[satellite_id]
+                            if delta_time != 0:
+                                doppler = delta_phase / delta_time  # Tính Doppler
+                            else:
+                                doppler = 0
+                        else:
+                            doppler = 0  # Không có dữ liệu trước đó
+
+                        # Cập nhật giá trị carrier_phase và gps_seconds cho lần đo hiện tại
+                        prev_carrier_phase[satellite_id] = carrier_phase
+                        prev_gps_seconds[satellite_id] = gps_seconds
+
+
+
+                        # data.append((epoch_time, satellite_id, newPseudorange, carrier_phase))
+                        new_carrier_phase = carrier_phase / LAMBDA_L1 - (-float(clock_bias))*doppler
+                        data.append((new_epoch, satellite_id, newPseudorange, new_carrier_phase))
+
+                        
+    return pd.DataFrame(data, columns=['epoch', 'PRN', 'pseudorange', 'carrier_phase'])
+
+def carrier_smoothing(df, wavelength=0.19, N=300):
+    """
+    Tinh toan carrier-smoothed pseudorang theo cong thuc https://gssc.esa.int/navipedia/index.php/Carrier-smoothing_of_code_pseudoranges
+    wavelength: Do dai song (met) cua tin hieu GNSS; 0.19 cho tin hieu L1 GPS
+    N: so epoch lam muot (alpha = 1/N)
+    """
+
+    alpha = 1/N
+    smoothed_data = []
+    last_smoothed = {} # luu trong thai smoothed pseudorange cua tung ve tinh
+    last_carrier_phase = {} # Luu gia tri carrier phase tai epoch truoc
+
+    for index, row in df.iterrows():
+        if index <= N:
+            alpha = 1/index
+        else:
+            alpha = 1/N
+        satellite = row['satellite']
+        pseudorange = row['pseudorange']
+        carrier_phase = row['carrier_phase']
+
+        if satellite in last_smoothed and satellite in last_carrier_phase:
+            # Tinh toan gia tri smoothed pseudorange
+            delta_phase = carrier_phase - last_carrier_phase[satellite]
+            smoothed = alpha * pseudorange + (1 - alpha) * (last_smoothed[satellite] + delta_phase)
+        else:
+            smoothed = pseudorange # Gia tri khoi tao neu khong co gia tri truoc
+
+        # Cap nhat gia tri cho ve tinh hien tai
+        last_smoothed[satellite] = smoothed
+        last_carrier_phase[satellite] = carrier_phase
+
+        smoothed_data.append((row['epoch'], satellite, pseudorange, carrier_phase, smoothed))
+
+    return pd.DataFrame(smoothed_data, columns=['epoch', 'satellite', 'pseudorange', 'carrier_phase', 'smoothed_pseudorange'])
+
+def plotSmoothedAlphaSingleDiff(merged_smoothed_data, col_name, folder_path):
+    for satellite in merged_smoothed_data['PRN'].unique():
+        plt.figure(figsize=(10, 6))
+        
+        satellite_data = merged_smoothed_data[merged_smoothed_data['PRN'] == satellite]
+        # plt.plot(satellite_data['epoch'], satellite_data['normalize_difference'], label=f'Satellite {satellite}')
+
+        plt.plot(satellite_data['epoch'], satellite_data[col_name], label=f'Satellite {satellite}')
+
+        plt.xlabel('Epoch')
+        plt.xticks(rotation=45)
+        plt.ylabel(col_name)
+        plt.title('PRN ' + satellite + ' Angle from DcosAlpha (' + DATA_TYPE + ')')
+        plt.legend()
+        plt.grid()
+        
+        plt.savefig(os.path.join(folder_path, satellite + '_' + DATA_TYPE + '_SmoothedSingleDiff.png'))
+        plt.close()
+
+def plotAngle(obs_data, folder_path, angle_name, angle_column):
+    for satellite in obs_data['PRN'].unique():
+        plt.figure(figsize=(10, 6))
+        alpha_data = obs_data[obs_data['PRN'] == satellite]
+        # plt.plot(satellite_data['epoch'], satellite_data['normalize_difference'], label=f'Satellite {satellite}')
+
+        plt.plot(alpha_data['epoch'], alpha_data[angle_column], label=f'Satellite {satellite}')
+
+        plt.xlabel('Epoch')
+        plt.xticks(rotation=45)
+        plt.ylabel(f'{angle_name} Angle (degree)')
+        plt.title('PRN' + satellite + ' ' + f'{angle_name} Angle Time Series (' + DATA_TYPE + ')')
+        plt.legend()
+        plt.grid()
+
+        plt.savefig(os.path.join(folder_path, satellite + '_' + DATA_TYPE + f'_{angle_name}Manual.png'))
+        plt.close()
+    #plt.show()
+
+
+obs_data_rx1 = read_rinex_observation(file1, IS_CLOCK)
+obs_data_rx2 = read_rinex_observation(file2, IS_CLOCK)
+
+merged_smoothed_data = pd.merge(obs_data_rx1, obs_data_rx2, on=['epoch', 'PRN'], suffixes=('_file1', '_file2'))
+merged_smoothed_data['difference_pseudorange'] = merged_smoothed_data['pseudorange_file1'] - merged_smoothed_data['pseudorange_file2'] - NORMALIZE_VALUE
+merged_smoothed_data['difference_carrier_phase'] = merged_smoothed_data['carrier_phase_file1'] - merged_smoothed_data['carrier_phase_file2'] - NORMALIZE_VALUE
+
+
+merged_smoothed_data['cosAlpha'] = merged_smoothed_data['difference_pseudorange'] / D_rx1_rx2
+
+
+merged_smoothed_data['Alpha_radian'] = np.acos(merged_smoothed_data['difference_pseudorange'] / D_rx1_rx2)
+merged_smoothed_data['Alpha'] = np.degrees(merged_smoothed_data['Alpha_radian'])
+
+# Debug: Print receiver position
+print("Receiver Position:", receiver_ecef)
+print(merged_smoothed_data[0:32])
+
+
+# plotSmoothedAlphaSingleDiff(merged_smoothed_data, 'difference', FOLDER_PATH)
+
+
+# Tạo DataFrame cho double_difference
+def calculate_double_difference(merged_smoothed_data):
+    
+    double_diff_data = []
+
+    # Duyệt qua từng epoch
+    for epoch in merged_smoothed_data['epoch'].unique():
+        epoch_data = merged_smoothed_data[merged_smoothed_data['epoch'] == epoch]
+        
+        # Duyệt qua từng cặp vệ tinh
+        for sat1 in epoch_data['PRN'].unique():
+            for sat2 in epoch_data['PRN'].unique():
+                if sat1 != sat2:  # Không tính chênh lệch cho chính vệ tinh
+                    # Lấy giá trị difference_pseudorange của từng vệ tinh tại epoch này
+                    diff_pseudo_sat1 = epoch_data[epoch_data['PRN'] == sat1]['difference_pseudorange'].values[0]
+                    diff_pseudo_sat2 = epoch_data[epoch_data['PRN'] == sat2]['difference_pseudorange'].values[0]
+
+                    # Tính double_difference
+                    double_diff_pseudo = diff_pseudo_sat1 - diff_pseudo_sat2
+                    # double_diff = abs(diff_sat1) - abs(diff_sat2)
+
+                    # Lấy giá trị difference_carrier_phase_pseudorange của từng vệ tinh tại epoch này
+                    diff_carrier_phase_sat1 = epoch_data[epoch_data['PRN'] == sat1]['difference_carrier_phase'].values[0]
+                    diff_carrier_phase_sat2 = epoch_data[epoch_data['PRN'] == sat2]['difference_carrier_phase'].values[0]
+
+                    # Tính double_difference
+                    double_diff_carrier_phase = diff_carrier_phase_sat1 - diff_carrier_phase_sat2
+                    # double_diff = abs(diff_sat1) - abs(diff_sat2)
+
+
+                    # Tạo chuỗi satellite_difference
+                    satellite_diff = f"{sat1}_{sat2}"
+
+                    # Thêm vào danh sách kết quả
+                    double_diff_data.append({
+                        'epoch': epoch,
+                        'satellite1': sat1,
+                        'satellite2': sat2,
+                        'double_difference_pseudorange': double_diff_pseudo,
+                        'double_difference_carrier_phase': double_diff_carrier_phase,
+                        'satellite_difference': satellite_diff
+                    })
+
+    # Chuyển danh sách thành DataFrame
+    return pd.DataFrame(double_diff_data)
+
+# Tạo DataFrame cho double_difference
+def calculate_double_difference2(merged_smoothed_data):
+    double_diff_data = []
+
+    # Duyệt qua từng epoch
+    for epoch in merged_smoothed_data['epoch'].unique():
+        epoch_data = merged_smoothed_data[merged_smoothed_data['epoch'] == epoch]
+        
+        # Duyệt qua từng cặp vệ tinh
+        for sat1 in epoch_data['PRN'].unique():
+            for sat2 in epoch_data['PRN'].unique():
+                if sat1 != sat2:  # Không tính chênh lệch cho chính vệ tinh
+                    # Lấy giá trị difference của từng vệ tinh tại epoch này
+                    diff_sat1 = epoch_data[epoch_data['PRN'] == sat1]['difference_pseudorange'].values[0]
+                    diff_sat2 = epoch_data[epoch_data['PRN'] == sat2]['difference_pseudorange'].values[0]
+
+
+                    # Tính double_difference
+                    double_diff = diff_sat1 - diff_sat2
+                    # double_diff = abs(diff_sat1) - abs(diff_sat2)
+                    
+                    #
+
+
+                    #lấy giá trị cosAlpha
+                    cosAlpha_sat1 = epoch_data[epoch_data['PRN'] == sat1]['cosAlpha'].values[0]
+                    cosAlpha_sat2 = epoch_data[epoch_data['PRN'] == sat2]['cosAlpha'].values[0]
+
+                    deltaCosAlpha = cosAlpha_sat1 - cosAlpha_sat2
+
+
+                    # Tạo chuỗi satellite_difference
+                    satellite_diff = f"{sat1}_{sat2}"
+
+                    # Thêm vào danh sách kết quả
+                    double_diff_data.append({
+                        'epoch': epoch,
+                        'satellite1': sat1,
+                        'satellite2': sat2,
+                        'double_difference': double_diff,
+                        'deltaCosAlpha' : deltaCosAlpha,
+                        'satellite_difference': satellite_diff
+                    })
+
+    # Chuyển danh sách thành DataFrame
+    return pd.DataFrame(double_diff_data)
+
+
+
+# Tính double_difference
+merged_smoothed_data_double = calculate_double_difference(merged_smoothed_data)
+
+
+
+
+
+def plotDoubleDifference(merged_smoothed_data_double, col_name, folder_path):
+    for satellite_diff in merged_smoothed_data_double['satellite_difference'].unique():
+        plt.figure(figsize=(10, 6))
+
+        # Lọc dữ liệu cho từng cặp vệ tinh (satellite_difference)
+        satellite_diff_data = merged_smoothed_data_double[merged_smoothed_data_double['satellite_difference'] == satellite_diff]
+
+        # Vẽ biểu đồ với dữ liệu double_difference
+        plt.plot(satellite_diff_data['epoch'], satellite_diff_data[col_name], label=f'{satellite_diff}')
+
+        # Thêm nhãn và tiêu đề
+        plt.xlabel('Epoch')
+        plt.xticks(rotation=45)
+        plt.ylabel(f'{col_name}_pseudorange')
+        plt.title(f'{satellite_diff} Double Difference over Epochs')
+        plt.legend()
+        plt.grid()
+
+        # Lưu biểu đồ vào thư mục
+        plt.savefig(os.path.join(folder_path, f'{satellite_diff}_DoubleDifference.png'))
+        plt.close()
+
+
+print(merged_smoothed_data_double[1:45])
+# Vẽ biểu đồ double_difference_pseudorange
+# plotDoubleDifference(merged_smoothed_data_double, 'double_difference_pseudorange', FOLDER_PATH)
+
+
+
+
+def plotDoubleDifference_Carrier_phase(merged_smoothed_data_double, col_name, folder_path):
+    for satellite_diff in merged_smoothed_data_double['satellite_difference'].unique():
+        plt.figure(figsize=(10, 6))
+
+        # Lọc dữ liệu cho từng cặp vệ tinh (satellite_difference)
+        satellite_diff_data = merged_smoothed_data_double[merged_smoothed_data_double['satellite_difference'] == satellite_diff]
+
+        # Vẽ biểu đồ với dữ liệu double_difference
+        plt.plot(satellite_diff_data['epoch'], satellite_diff_data[col_name], label=f'{satellite_diff}')
+
+        # Thêm nhãn và tiêu đề
+        plt.xlabel('Epoch')
+        plt.xticks(rotation=45)
+        plt.ylabel(f'{col_name}_carrier_phase')
+        plt.title(f'{satellite_diff} Double Difference over Epochs')
+        plt.legend()
+        plt.grid()
+
+        # Lưu biểu đồ vào thư mục
+        plt.savefig(os.path.join(folder_path, f'{satellite_diff}_DoubleCarrierPhase.png'))
+        plt.close()
+
+# print(merged_smoothed_data_double)
+# Vẽ biểu đồ double_difference_carierphase
+plotDoubleDifference_Carrier_phase(merged_smoothed_data_double, 'double_difference_carrier_phase', FOLDER_PATH)
+
+
+
+
+
+
+
+
+
+
+def plot_all_double_difference_comparisons(merged_smoothed_data_double, folder_path):
+    """
+    Vẽ biểu đồ double difference cho tất cả các vệ tinh tham chiếu với tất cả các vệ tinh còn lại trên cùng một biểu đồ.
+    Lọc chỉ vẽ các cặp vệ tinh mà bắt đầu từ G01, G02, ..., G32.
+    """
+    for reference_satellite in list_satellite:  # Duyệt qua tất cả các vệ tinh trong danh sách
+        # Lọc các dữ liệu cho vệ tinh tham chiếu
+        reference_data = merged_smoothed_data_double[merged_smoothed_data_double['satellite1'] == reference_satellite]
+
+        # Khởi tạo một biểu đồ
+        plt.figure(figsize=(10, 6))
+        
+        # Vẽ biểu đồ cho các vệ tinh khác với vệ tinh tham chiếu, chỉ vẽ cặp vệ tinh bắt đầu từ vệ tinh tham chiếu
+        for satellite_diff in merged_smoothed_data_double['satellite_difference'].unique():
+            if satellite_diff.startswith(reference_satellite):  # Lọc chỉ các vệ tinh bắt đầu từ reference_satellite
+                # Lọc dữ liệu cho cặp vệ tinh
+                satellite_diff_data = merged_smoothed_data_double[merged_smoothed_data_double['satellite_difference'] == satellite_diff]
+                plt.plot(satellite_diff_data['epoch'], satellite_diff_data['double_difference_pseudorange'], label=satellite_diff)
+        
+        # Thêm các yếu tố cho biểu đồ
+        plt.xlabel('Epoch')
+        plt.xticks(rotation=45)
+        plt.ylabel('Double Difference Pseudogrange')
+        plt.title(f'{reference_satellite} Double Difference Pseudogrange Comparison over Epochs')
+        plt.legend()
+        plt.grid()
+
+        # Lưu biểu đồ vào thư mục
+        plt.savefig(os.path.join(folder_path, f'{reference_satellite}_DoubleDifferenceComparison.png'))
+        plt.close()
+        
+
+
+
+
+
+
+
+# Gọi hàm để vẽ biểu đồ cho tất cả các vệ tinh
+# plot_all_double_difference_comparisons(merged_smoothed_data_double, 'Pseudorange_smooth_internal_clock_RX/output_folder')
+
+
+
+def plot_all_double_difference_comparisons2(merged_smoothed_data_double, folder_path):
+    """
+    Vẽ biểu đồ double difference cho tất cả các vệ tinh tham chiếu với tất cả các vệ tinh còn lại trên cùng một biểu đồ.
+    Lọc chỉ vẽ các cặp vệ tinh mà bắt đầu từ G01, G02, ..., G32.
+    """
+    for reference_satellite in list_satellite:  # Duyệt qua tất cả các vệ tinh trong danh sách
+        # Lọc các dữ liệu cho vệ tinh tham chiếu
+        reference_data = merged_smoothed_data_double[merged_smoothed_data_double['satellite1'] == reference_satellite]
+
+        # Khởi tạo một biểu đồ
+        plt.figure(figsize=(10, 6))
+        
+        # Vẽ biểu đồ cho các vệ tinh khác với vệ tinh tham chiếu, chỉ vẽ cặp vệ tinh bắt đầu từ vệ tinh tham chiếu
+        for satellite_diff in merged_smoothed_data_double['satellite_difference'].unique():
+            if satellite_diff.startswith(reference_satellite):  # Lọc chỉ các vệ tinh bắt đầu từ reference_satellite
+                # Lọc dữ liệu cho cặp vệ tinh
+                satellite_diff_data = merged_smoothed_data_double[merged_smoothed_data_double['satellite_difference'] == satellite_diff]
+                plt.plot(satellite_diff_data['epoch'], satellite_diff_data['double_difference_carrier_phase'], label=satellite_diff)
+        
+        # Thêm các yếu tố cho biểu đồ
+        plt.xlabel('Epoch')
+        plt.xticks(rotation=45)
+        plt.ylabel('Double Difference Carrier phase')
+        plt.title(f'{reference_satellite} Double Difference Pseudogrange Comparison over Epochs')
+        plt.legend()
+        plt.grid()
+
+        # Lưu biểu đồ vào thư mục
+        plt.savefig(os.path.join(folder_path, f'{reference_satellite}_DoubleDifferenceComparison.png'))
+        plt.close()
+        
+
+
+
+
+
+
+
+# Gọi hàm để vẽ biểu đồ cho tất cả các vệ tinh
+# plot_all_double_difference_comparisons(merged_smoothed_data_double, 'Pseudorange_smooth_internal_clock_RX/output_folder')
+
+plot_all_double_difference_comparisons2(merged_smoothed_data_double, 'Pseudorange_smooth_internal_clock_RX/output_folder2')
+
+
+
+
+
+
+
+
+
+
+
