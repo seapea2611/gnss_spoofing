@@ -1,6 +1,6 @@
 '''
     Calculate Alpha from Carrier Smoothing
-    Data smoothed export from Receiver
+    Data export from Receiver
 '''
 import os
 import pandas as pd
@@ -48,20 +48,20 @@ else:
 
     rx_name_01 = 'rx_01'
 
-    observation_file1 = r"hai\ngoc\spoof\SP-2025-05-14_07\raw_data_1.obs"
-    observation_file2 = r"hai\ngoc\spoof\SP-2025-05-14_07\raw_data_2.obs"
+    observation_file1 = r"hai\ngoc\2025-04-24_07\raw_data_1.obs"
+    observation_file2 = r"hai\ngoc\2025-04-24_07\raw_data_2.obs"
     
-    nav_file1= r"hai\ngoc\spoof\SP-2025-05-14_07\raw_data_1.nav"
-    nav_file2= r"hai\ngoc\spoof\SP-2025-05-14_07\raw_data_2.nav"
+    nav_file1= r"hai\ngoc\2025-04-24_07\raw_data_1.nav"
+    nav_file2= r"hai\ngoc\2025-04-24_07\raw_data_2.nav"
 
 
     
     # Tọa độ bộ thu trong hệ ECEF (Đã biết)
-    receiver_ecef_01 = np.array([  -1626589.5179 , 5730541.5951 , 2271880.7118 ])
+    receiver_ecef_01 = np.array([ -1626584.3791,  5730530.1190,  2271874.2369])
     
     rx_name_02 = 'rx_02'   
     # Tọa độ bộ thu trong hệ ECEF (Đã biết)
-    receiver_ecef_02 = np.array([  -1626589.7104 , 5730542.7933 , 2271881.0223 ])
+    receiver_ecef_02 = np.array([ -1626582.6724,  5730529.6398,  2271872.7806])
     
     
     NORMALIZE_VALUE = 85897
@@ -350,7 +350,7 @@ def read_rinex_observation_haidv(file_path):
                         if pseudorange and carrier_phase != 0:
                             newPseudorange = float(pseudorange) - (-c*float(clock_bias))
                             new_epoch = round(gps_seconds - (-float(clock_bias)))
-                            new_carrier_phase = carrier_phase - (-float(clock_bias))*doppler
+                            new_carrier_phase = carrier_phase
                             data.append((new_epoch, epoch_time, satellite_id, newPseudorange, new_carrier_phase, doppler))
     
     return pd.DataFrame(data, columns=['epoch', 'epoch_time', 'PRN', 'pseudorange', 'carrier_phase', 'doppler'])
@@ -725,12 +725,12 @@ def calculate_double_difference(merged_smoothed_data):
                     diff_carrier_phase_sat2 = epoch_data[epoch_data['PRN'] == sat2]['difference_carrier_phase'].values[0]
 
                     # Tính double_difference
-                    double_diff_carrier_phase = diff_carrier_phase_sat1 - diff_carrier_phase_sat2
+                    double_diff_carrier_phase = (diff_carrier_phase_sat1 - diff_carrier_phase_sat2) * Lamda_L1
                     # double_diff = abs(diff_sat1) - abs(diff_sat2)
 
                     fract_double_diff_carrier_phase = double_diff_carrier_phase - round(double_diff_carrier_phase)
                     
-                    fract_double_diff_carrier_phase = fract_double_diff_carrier_phase * Lamda_L1
+                    fract_double_diff_carrier_phase = fract_double_diff_carrier_phase
                     # Tính μ_i^2 và cộng vào tổng (sos)
                     if not pd.isna(fract_double_diff_carrier_phase):
                         sos += omega_i * (fract_double_diff_carrier_phase ** 2)
