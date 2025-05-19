@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from scipy.interpolate import interp1d
 from numpy.polynomial.polynomial import polyfit
-
+from scipy.signal import savgol_filter, butter, filtfilt
 from datetime import datetime, timedelta
 
 list_satellite = ['G01', 'G02', 'G03', 'G04','G05', 'G06', 'G07', 'G08', 'G09', 'G10', 
@@ -163,136 +163,6 @@ def  compute_dt_seconds(t_rx_utc_str):
         "gps_week_start": gps_week_start,
         "t_rx_toe": t_rx_toe,
     }
-
-
-def read_rinex_observation_Doppler(file_path, isClock):
-    """
-    Đọc file RINEX và trích xuất dữ liệu cần thiết.
-    Trả về DataFrame chứa: thời gian (epoch), số hiệu vệ tinh, và pseudorange.
-    """
-    data = []
-    reading_data = False
-    epoch_time = ''
-    clock_bias = 0
-
-
-
-    with open(file_path, 'r') as file:
-        lines = file.readlines()[20:LINE_COUNT]
-
-        for line in lines:
-
-            if line.startswith('>'):  # Epoch bắt đầu bằng ký tự '>'
-                epoch_time = line[1:25].strip()  # Lấy thời gian epoch
-
-                new_epoch = calc_gps_seconds(epoch_time)
-
-            if not reading_data:
-                if line.startswith('>'):  # Epoch bắt đầu bằng ký tự '>'
-                    reading_data = True
-            else:
-                if line.strip() == '':
-                    continue
-
-                # Split dong bang khoang trang hoac tab
-                parts = line.split()
-                if len(parts) < 2:
-                    continue
-
-                satellite_id = parts[0]  # Lấy số hiệu vệ tinh
-                if satellite_id in list_satellite:
-                    
-                    doppler_str = line[133:146]
-                    if doppler_str.isspace():
-                        doppler = 0
-                    else:
-                        doppler = float(doppler_str)
-                    data.append(( new_epoch, epoch_time, satellite_id, doppler))
-    return pd.DataFrame(data, columns=['epoch','epoch_time','PRN','doppler'])
-
-
-def read_rinex_observation_NguyenDS2(file_path,observation_file_doppler, isClock):
-    """
-    Đọc file RINEX và trích xuất dữ liệu cần thiết.
-    Trả về DataFrame chứa: thời gian (epoch), số hiệu vệ tinh, và pseudorange.
-    """
-    obs_data_doppler = read_rinex_observation_Doppler(observation_file_doppler, IS_CLOCK2)
-    data = []
-    reading_data = False
-    epoch_time = ''
-    clock_bias = 0
-    count_line = 0
-    with open(file_path, 'r') as file:
-        lines = file.readlines()[20:LINE_COUNT]
-
-        for line in lines:
-
-            if line.startswith('>'):  # Epoch bắt đầu bằng ký tự '>'
-                epoch_time = line[1:24].strip()  # Lấy thời gian epoch
-                _, gps_seconds = cal2gpstime(epoch_time) 
-
-                parts = line.split()
-                clock_bias = parts[9]
-
-            if not reading_data:
-                if line.startswith('>'):  # Epoch bắt đầu bằng ký tự '>'
-                    reading_data = True
-            else:
-                if line.strip() == '':
-                    continue
-
-                # Split dong bang khoang trang hoac tab
-                parts = line.split()
-                if len(parts) < 2:
-                    continue
-
-                satellite_id = parts[0]  # Lấy số hiệu vệ tinh
-                if satellite_id in list_satellite:
-                    pseudorange = parts[1]  # Lấy pseudorange
-                    carrier_phase_str = parts[3] # lay carrier phase
-                    
-                    if carrier_phase_str.isspace():
-                        carrier_phase = 0
-                    else:
-                        carrier_phase = float(carrier_phase_str)
-
-                    if pseudorange and carrier_phase != 0:
-                        newPseudorange = float(pseudorange) - (-c*float(clock_bias))
-                        # if isClock == 1:
-                        #     newPseudorange = float(pseudorange)
-                        # else:
-                        #     newPseudorange = float(pseudorange) - (c*float(clock_bias))
-                        new_epoch = round( gps_seconds - (-float(clock_bias)))
-
-                        # Lọc Doppler từ obs_data_doppler dựa trên epoch_time và PRN
-
-                        # doppler_value = obs_data_doppler.loc[(calc_gps_seconds(obs_data_doppler['epoch_time']) == calc_gps_seconds(epoch_time)) & 
-                        #              (obs_data_doppler['PRN'] == satellite_id), 'doppler'].values
-                        # Lọc giá trị Doppler từ obs_data_doppler theo epoch và PRN
-                        gps_seconds
-                        doppler_value = obs_data_doppler.loc[
-                            (obs_data_doppler['epoch'] == gps_seconds) & 
-                            (obs_data_doppler['PRN'] == satellite_id), 'doppler'
-                        ].values
-
-
-
-                        if len(doppler_value) > 0:
-                            doppler = doppler_value[0]  # Lấy giá trị Doppler từ dữ liệu đã đọc
-                        else:
-                            doppler = 0  # Nếu không có Doppler, gán giá trị mặc định
-
-                        
-
-                        # data.append((epoch_time, satellite_id, newPseudorange, carrier_phase))
-                        new_carrier_phase = carrier_phase - (-float(clock_bias))*doppler
-
-
-
-                        data.append((new_epoch, epoch_time, satellite_id, newPseudorange, new_carrier_phase, doppler))
-    return pd.DataFrame(data, columns=['epoch', 'epoch_time', 'PRN', 'pseudorange', 'carrier_phase','doppler'])
-
-
 # doc file rinex 3.04
 def read_rinex_observation_haidv(file_path):
     """
@@ -725,12 +595,12 @@ def calculate_double_difference(merged_smoothed_data):
                     diff_carrier_phase_sat2 = epoch_data[epoch_data['PRN'] == sat2]['difference_carrier_phase'].values[0]
 
                     # Tính double_difference
-                    double_diff_carrier_phase = (diff_carrier_phase_sat1 - diff_carrier_phase_sat2) * Lamda_L1
+                    double_diff_carrier_phase = (diff_carrier_phase_sat1 - diff_carrier_phase_sat2) 
                     # double_diff = abs(diff_sat1) - abs(diff_sat2)
 
                     fract_double_diff_carrier_phase = double_diff_carrier_phase - round(double_diff_carrier_phase)
                     
-                    fract_double_diff_carrier_phase = fract_double_diff_carrier_phase
+                    fract_double_diff_carrier_phase = fract_double_diff_carrier_phase * Lamda_L1
                     # Tính μ_i^2 và cộng vào tổng (sos)
                     if not pd.isna(fract_double_diff_carrier_phase):
                         sos += omega_i * (fract_double_diff_carrier_phase ** 2)
@@ -964,3 +834,136 @@ def plot_fract_DD_CP_linear_regression(merged_smoothed_data_double, folder_path)
 # Thêm lệnh gọi hàm mới
 plot_fract_DD_CP_linear_regression(merged_smoothed_data_double_3x, r'PLOT\external\D2025_04_21_doplerConvert\fract_DD_CP_LinearRegression')
 
+def plot_all_double_difference_comparisons_outlier(merged_smoothed_data_double, folder_path, label1, label2, key):
+    """
+    Vẽ biểu đồ double difference sau khi đã lọc outlier sử dụng phương pháp IQR.
+    """
+    plot_data = merged_smoothed_data_double
+    
+    for reference_satellite in list_satellite:
+        reference_data = plot_data[plot_data['PRN_1'] == reference_satellite]
+        
+        if len(reference_data) == 0:
+            continue
+            
+        plt.figure(figsize=(10, 6))
+        
+        for satellite_diff in plot_data['PRN_difference'].unique():
+            if satellite_diff.startswith(reference_satellite):
+                satellite_diff_data = plot_data[plot_data['PRN_difference'] == satellite_diff]
+                if len(satellite_diff_data) > 0:
+                    # Lấy dữ liệu gốc
+                    x = satellite_diff_data['epoch'].values
+                    y = satellite_diff_data[f'{key}'].values
+                    
+                    # Xử lý giá trị NaN
+                    mask = ~np.isnan(y)
+                    if np.sum(mask) > 3:  # Kiểm tra đủ điểm dữ liệu
+                        x_valid = x[mask]
+                        y_valid = y[mask]
+                        
+                        # Loại bỏ outlier sử dụng IQR
+                        q1 = np.percentile(y_valid, 25)
+                        q3 = np.percentile(y_valid, 75)
+                        iqr = q3 - q1
+                        lower_bound = q1 - 1.5 * iqr
+                        upper_bound = q3 + 1.5 * iqr
+                        
+                        outlier_mask = (y_valid >= lower_bound) & (y_valid <= upper_bound)
+                        x_filtered = x_valid[outlier_mask]
+                        y_filtered = y_valid[outlier_mask]
+                        
+                        # Vẽ điểm dữ liệu gốc mờ
+                        plt.scatter(x_valid, y_valid, alpha=0.2, s=10)
+                        plt.plot(x_filtered, y_filtered, label=satellite_diff, linewidth=3)
+        
+        plt.xlabel('Epoch')
+        plt.xticks(rotation=45)
+        plt.ylabel(f'{label1}')
+        plt.title(f'{reference_satellite} {label2} Comparison (Outlier Filtered)')
+        plt.legend()
+        plt.grid()
+        
+        plt.savefig(os.path.join(folder_path, f'{reference_satellite}_{label2}_outlier_Comparison.png'))
+        plt.close()
+
+# Gọi hàm với phương pháp lọc outlier
+plot_all_double_difference_comparisons_outlier(
+    merged_smoothed_data_double_3x,
+    r'PLOT\external\D2025_04_21_doplerConvert\carrier_phase_fract_filtered_outlier',
+    'fract_DD_CP', 'fract_DD_CP', 'fract_DD_CP'
+)
+
+def plot_fract_DD_CP_linear_regression_outlier(merged_smoothed_data_double, folder_path):
+    """
+    Vẽ biểu đồ fract_DD_CP theo epoch sử dụng hồi quy tuyến tính (Linear Regression)
+    sau khi đã lọc dữ liệu bằng phương pháp loại bỏ outlier.
+    """
+    plot_data = merged_smoothed_data_double
+    
+    for reference_satellite in list_satellite:
+        reference_data = plot_data[plot_data['PRN_1'] == reference_satellite]
+        
+        if len(reference_data) == 0:
+            continue
+            
+        plt.figure(figsize=(12, 8))
+        
+        for satellite_diff in plot_data['PRN_difference'].unique():
+            if satellite_diff.startswith(reference_satellite):
+                satellite_diff_data = plot_data[plot_data['PRN_difference'] == satellite_diff]
+                if len(satellite_diff_data) > 0:
+                    # Lấy dữ liệu gốc
+                    x = satellite_diff_data['epoch'].values
+                    y = satellite_diff_data['fract_DD_CP'].values
+                    
+                    # Xử lý giá trị NaN
+                    mask = ~np.isnan(y)
+                    if np.sum(mask) > 3:  # Kiểm tra đủ điểm dữ liệu
+                        x_valid = x[mask]
+                        y_valid = y[mask]
+                        
+                        # Loại bỏ outlier sử dụng IQR
+                        q1 = np.percentile(y_valid, 25)
+                        q3 = np.percentile(y_valid, 75)
+                        iqr = q3 - q1
+                        lower_bound = q1 - 1.5 * iqr
+                        upper_bound = q3 + 1.5 * iqr
+                        
+                        outlier_mask = (y_valid >= lower_bound) & (y_valid <= upper_bound)
+                        x_filtered = x_valid[outlier_mask]
+                        y_filtered = y_valid[outlier_mask]
+                        
+                        # Kiểm tra đủ điểm dữ liệu cho hồi quy
+                        if len(x_filtered) > 1:
+                            # Thực hiện hồi quy tuyến tính trên dữ liệu đã lọc
+                            X_for_reg = x_filtered.reshape(-1, 1)
+                            model = LinearRegression()
+                            model.fit(X_for_reg, y_filtered)
+                            
+                            # Dự đoán giá trị hồi quy
+                            X_full = x.reshape(-1, 1)
+                            y_pred = model.predict(X_full)
+                            
+                            # Vẽ dữ liệu gốc và đường hồi quy
+                            plt.scatter(x_valid, y_valid, alpha=0.2, s=10)  # Dữ liệu gốc (mờ)
+                            plt.scatter(x_filtered, y_filtered, alpha=0.5, s=20)  # Dữ liệu đã lọc
+                            plt.plot(x, y_pred, label=f"{satellite_diff} (a={model.coef_[0]:.6f}, b={model.intercept_:.6f})", linewidth=2)
+        
+        plt.xlabel('Epoch')
+        plt.ylabel('fract_DD_CP')
+        plt.title(f'{reference_satellite} Linear Regression of fract_DD_CP (Outlier Filtered)')
+        plt.legend()
+        plt.grid(True)
+        plt.axhline(y=0, color='r', linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        
+        plt.savefig(os.path.join(folder_path, f'{reference_satellite}_fract_DD_CP_LinearRegression_outlier.png'))
+        plt.close()
+
+# Gọi hàm với phương pháp lọc outlier
+plot_fract_DD_CP_linear_regression_outlier(
+    merged_smoothed_data_double_3x,
+    r'PLOT\external\D2025_04_21_doplerConvert\fract_DD_CP_LinearRegression_outlier'
+)
