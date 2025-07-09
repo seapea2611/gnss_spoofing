@@ -48,11 +48,7 @@ def safe_acos(value):
 
 IS_CLOCK2 = 1
 if IS_CLOCK2 == 0:
-    # DATA_TYPE = 'NOCLOCK'
-    # # No Clock
-    # FOLDER_PATH = './Pseudorange_smooth_internal_clock/'  # Đường dẫn tới file 1
-    # file1 = './Pseudorange_smooth_internal_clock/89683563/IGS000USA_R_20243560229_01D_01S_MO.rnx'  # Đường dẫn tới file 1
-    # file2 = './Pseudorange_smooth_internal_clock/96813563/96813563.24O'  # Đường dẫn tới file 2
+   
     NORMALIZE_VALUE = 0
 else:
     DATA_TYPE = 'CLOCK'
@@ -69,11 +65,11 @@ else:
 
     
     
-    # Tọa độ bộ thu trong hệ ECEF (Đã biết)
+    # Tọa độ bộ thu trong hệ ECEF
     receiver_ecef_01 = np.array([-1626589.5179, 5730541.5951, 2271880.7118])
     
     rx_name_02 = 'rx_02'
-    # Tọa độ bộ thu trong hệ ECEF (Đã biết)
+    # Tọa độ bộ thu trong hệ ECEF
     receiver_ecef_02 = np.array([ -1626589.7104 , 5730542.7933 , 2271881.0223])
     
     
@@ -105,7 +101,7 @@ def cal2gpstime(date_str: str):
 
     return gps_week, gps_seconds
 def calc_gps_seconds(date_str: str):
-    """bạn
+    """
     Chuyển đổi thời gian dương lịch (UTC) dạng chuỗi sang GPS week và GPS seconds.
 
     Args:
@@ -581,7 +577,7 @@ with open('obs_data_output.txt', 'w') as file:
 print("Data has been saved to obs_data_output.txt")
 
 merged_data = pd.merge(obs_data1, obs_data2, on=['epoch', 'PRN'], suffixes=('_file1', '_file2'))
-merged_data['difference_pseudorange'] = merged_data['pseudorange_file1'] - merged_data['pseudorange_file2'] - NORMALIZE_VALUE
+merged_data['difference_pseudorange'] = merged_data['pseudorange_file1'] - merged_data['pseudorange_file2']
 merged_data['difference_carrier_phase'] = merged_data['carrier_phase_file1'] - merged_data['carrier_phase_file2']
 merged_data['cosAlpha_avg'] =  ( merged_data['cosAlpha_file1'] + merged_data['cosAlpha_file2'] ) /2
 
@@ -743,7 +739,7 @@ merged_smoothed_data_double_3x = calculate_double_difference(merged_data)
 
 print(merged_smoothed_data_double_3x)
 
-def plot_all_double_difference_comparisons_nds1(merged_smoothed_data_double, folder_path, label1, label2, key):
+def plot_all_double_difference_comparisons(merged_smoothed_data_double, folder_path, label1, label2, key):
     """
     Vẽ biểu đồ double difference cho tất cả các vệ tinh tham chiếu với tất cả các vệ tinh còn lại trên cùng một biểu đồ.
     Lọc chỉ vẽ các cặp vệ tinh mà bắt đầu từ G01, G02, ..., G32.
@@ -789,9 +785,9 @@ def plot_all_double_difference_comparisons_nds1(merged_smoothed_data_double, fol
         plt.close()
 
 # Fract_carrier_phase
-plot_all_double_difference_comparisons_nds1(merged_smoothed_data_double_3x,r'PLOT\external\D2025_04_21_doplerConvert\carrier_phase_fract','fract_DD_CP','fract_DD_CP','fract_DD_CP')
-plot_all_double_difference_comparisons_nds1(merged_smoothed_data_double_3x,r'PLOT\external\D2025_04_21_doplerConvert\dfract_D_multi_deltaCosAlpha_ephemeris','fract_D_multi_deltaCosAlpha_ephemeris','fract_D_multi_deltaCosAlpha_ephemeris','fract_D_multi_deltaCosAlpha_ephemeris')
-plot_all_double_difference_comparisons_nds1(merged_smoothed_data_double_3x,r'PLOT\external\D2025_04_21_doplerConvert\alpha_avg2','alpha_avg2','alpha_avg2','alpha_avg2')
+plot_all_double_difference_comparisons(merged_smoothed_data_double_3x,r'PLOT\external\D2025_04_21_doplerConvert\carrier_phase_fract','fract_DD_CP','fract_DD_CP','fract_DD_CP')
+plot_all_double_difference_comparisons(merged_smoothed_data_double_3x,r'PLOT\external\D2025_04_21_doplerConvert\fract_D_multi_deltaCosAlpha_ephemeris','fract_D_multi_deltaCosAlpha_ephemeris','fract_D_multi_deltaCosAlpha_ephemeris','fract_D_multi_deltaCosAlpha_ephemeris')
+plot_all_double_difference_comparisons(merged_smoothed_data_double_3x,r'PLOT\external\D2025_04_21_doplerConvert\alpha_avg2','alpha_avg2','alpha_avg2','alpha_avg2')
 
 # Vẽ biểu đồ cho tất cả các alpha_results
 print("Vẽ biểu đồ cho tất cả các alpha_results...")
@@ -805,7 +801,7 @@ alpha_offsets = [
 
 for alpha_key in alpha_offsets:
     try:
-        plot_all_double_difference_comparisons_nds1(
+        plot_all_double_difference_comparisons(
             merged_smoothed_data_double_3x,
             rf'PLOT\external\D2025_04_21_doplerConvert\{alpha_key}',
             f'{alpha_key} (degrees)',
@@ -880,7 +876,6 @@ print("Hoàn thành vẽ tất cả biểu đồ alpha_results!")
 #         plt.savefig(os.path.join(folder_path, f'{reference_satellite}_fract_DD_CP_LinearRegression.png'))
 #         plt.close()
 
-# # Thêm lệnh gọi hàm mới
 # plot_fract_DD_CP_linear_regression(merged_smoothed_data_double_3x, r'PLOT\external\D2025_04_21_doplerConvert\fract_DD_CP_LinearRegression')
 
 # def plot_all_double_difference_comparisons_outlier(merged_smoothed_data_double, folder_path, label1, label2, key):
@@ -936,91 +931,91 @@ print("Hoàn thành vẽ tất cả biểu đồ alpha_results!")
 #         plt.savefig(os.path.join(folder_path, f'{reference_satellite}_{label2}_outlier_Comparison.png'))
 #         plt.close()
 
-# # Gọi hàm với phương pháp lọc outlier
+# # Gọi phương pháp lọc outlier
 # plot_all_double_difference_comparisons_outlier(
 #     merged_smoothed_data_double_3x,
 #     r'PLOT\external\D2025_04_21_doplerConvert\carrier_phase_fract_filtered_outlier',
 #     'fract_DD_CP', 'fract_DD_CP', 'fract_DD_CP'
 # )
 
-# def plot_fract_DD_CP_linear_regression_outlier(merged_smoothed_data_double, folder_path):
-#     """
-#     Vẽ biểu đồ fract_DD_CP theo epoch sử dụng hồi quy tuyến tính (Linear Regression)
-#     sau khi đã lọc dữ liệu bằng phương pháp loại bỏ outlier.
-#     """
-#     plot_data = merged_smoothed_data_double
+def plot_fract_DD_CP_linear_regression_outlier(merged_smoothed_data_double, folder_path):
+    """
+    Vẽ biểu đồ fract_DD_CP theo epoch sử dụng hồi quy tuyến tính (Linear Regression)
+    sau khi đã lọc dữ liệu bằng phương pháp loại bỏ outlier.
+    """
+    plot_data = merged_smoothed_data_double
     
-#     for reference_satellite in list_satellite:
-#         reference_data = plot_data[plot_data['PRN_1'] == reference_satellite]
+    for reference_satellite in list_satellite:
+        reference_data = plot_data[plot_data['PRN_1'] == reference_satellite]
         
-#         if len(reference_data) == 0:
-#             continue
+        if len(reference_data) == 0:
+            continue
             
-#         plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(12, 8))
         
-#         for satellite_diff in plot_data['PRN_difference'].unique():
-#             if satellite_diff.startswith(reference_satellite):
-#                 satellite_diff_data = plot_data[plot_data['PRN_difference'] == satellite_diff]
-#                 if len(satellite_diff_data) > 0:
-#                     # Lấy dữ liệu gốc
-#                     x = satellite_diff_data['epoch'].values
-#                     y = satellite_diff_data['fract_DD_CP'].values
+        for satellite_diff in plot_data['PRN_difference'].unique():
+            if satellite_diff.startswith(reference_satellite):
+                satellite_diff_data = plot_data[plot_data['PRN_difference'] == satellite_diff]
+                if len(satellite_diff_data) > 0:
+                    # Lấy dữ liệu gốc
+                    x = satellite_diff_data['epoch'].values
+                    y = satellite_diff_data['fract_DD_CP'].values
                     
-#                     # Xử lý giá trị NaN
-#                     mask = ~np.isnan(y)
-#                     if np.sum(mask) > 3:  # Kiểm tra đủ điểm dữ liệu
-#                         x_valid = x[mask]
-#                         y_valid = y[mask]
+                    # Xử lý giá trị NaN
+                    mask = ~np.isnan(y)
+                    if np.sum(mask) > 3:  # Kiểm tra đủ điểm dữ liệu
+                        x_valid = x[mask]
+                        y_valid = y[mask]
                         
-#                         # Loại bỏ outlier sử dụng IQR
-#                         q1 = np.percentile(y_valid, 25)
-#                         q3 = np.percentile(y_valid, 75)
-#                         iqr = q3 - q1
-#                         lower_bound = q1 - 1.5 * iqr
-#                         upper_bound = q3 + 1.5 * iqr
+                        # Loại bỏ outlier sử dụng IQR
+                        q1 = np.percentile(y_valid, 25)
+                        q3 = np.percentile(y_valid, 75)
+                        iqr = q3 - q1
+                        lower_bound = q1 - 1.5 * iqr
+                        upper_bound = q3 + 1.5 * iqr
                         
-#                         outlier_mask = (y_valid >= lower_bound) & (y_valid <= upper_bound)
-#                         x_filtered = x_valid[outlier_mask]
-#                         y_filtered = y_valid[outlier_mask]
+                        outlier_mask = (y_valid >= lower_bound) & (y_valid <= upper_bound)
+                        x_filtered = x_valid[outlier_mask]
+                        y_filtered = y_valid[outlier_mask]
                         
-#                         # Kiểm tra đủ điểm dữ liệu cho hồi quy
-#                         if len(x_filtered) > 1:
-#                             # Thực hiện hồi quy tuyến tính trên dữ liệu đã lọc
-#                             X_for_reg = x_filtered.reshape(-1, 1)
-#                             model = LinearRegression()
-#                             model.fit(X_for_reg, y_filtered)
+                        # Kiểm tra đủ điểm dữ liệu cho hồi quy
+                        if len(x_filtered) > 1:
+                            # Thực hiện hồi quy tuyến tính trên dữ liệu đã lọc
+                            X_for_reg = x_filtered.reshape(-1, 1)
+                            model = LinearRegression()
+                            model.fit(X_for_reg, y_filtered)
                             
-#                             # Dự đoán giá trị hồi quy
-#                             X_full = x.reshape(-1, 1)
-#                             y_pred = model.predict(X_full)
+                            # Dự đoán giá trị hồi quy
+                            X_full = x.reshape(-1, 1)
+                            y_pred = model.predict(X_full)
                             
-#                             # Vẽ dữ liệu gốc và đường hồi quy
-#                             plt.scatter(x_valid, y_valid, alpha=0.2, s=10)  # Dữ liệu gốc (mờ)
-#                             plt.scatter(x_filtered, y_filtered, alpha=0.5, s=20)  # Dữ liệu đã lọc
-#                             plt.plot(x, y_pred, label=f"{satellite_diff} (a={model.coef_[0]:.6f}, b={model.intercept_:.6f})", linewidth=2)
+                            # Vẽ dữ liệu gốc và đường hồi quy
+                            plt.scatter(x_valid, y_valid, alpha=0.2, s=10)  # Dữ liệu gốc (mờ)
+                            plt.scatter(x_filtered, y_filtered, alpha=0.5, s=20)  # Dữ liệu đã lọc
+                            plt.plot(x, y_pred, label=f"{satellite_diff} (a={model.coef_[0]:.6f}, b={model.intercept_:.6f})", linewidth=2)
         
-#         plt.xlabel('Epoch')
-#         plt.ylabel('fract_DD_CP')
-#         plt.title(f'{reference_satellite} Linear Regression of fract_DD_CP (Outlier Filtered)')
-#         plt.legend()
-#         plt.grid(True)
-#         plt.axhline(y=0, color='r', linestyle='--', alpha=0.5)
+        plt.xlabel('Epoch')
+        plt.ylabel('fract_DD_CP')
+        plt.title(f'{reference_satellite} Linear Regression of fract_DD_CP (Outlier Filtered)')
+        plt.legend()
+        plt.grid(True)
+        plt.axhline(y=0, color='r', linestyle='--', alpha=0.5)
         
-#         plt.tight_layout()
+        plt.tight_layout()
         
-#         plt.savefig(os.path.join(folder_path, f'{reference_satellite}_fract_DD_CP_LinearRegression_outlier.png'))
-#         plt.close()
+        plt.savefig(os.path.join(folder_path, f'{reference_satellite}_fract_DD_CP_LinearRegression_outlier.png'))
+        plt.close()
 
-# # Gọi hàm với phương pháp lọc outlier
-# plot_fract_DD_CP_linear_regression_outlier(
-#     merged_smoothed_data_double_3x,
-#     r'PLOT\external\D2025_04_21_doplerConvert\fract_DD_CP_LinearRegression_outlier'
-# )
+# Gọi hàm với phương pháp lọc outlier
+plot_fract_DD_CP_linear_regression_outlier(
+    merged_smoothed_data_double_3x,
+    r'PLOT\external\D2025_04_21_doplerConvert\fract_DD_CP_LinearRegression_outlier'
+)
 
 def plot_alpha_offset_vs_avg2(merged_smoothed_data_double: pd.DataFrame, folder_path: str):
     """
     Vẽ alpha_offset (tất cả satellite_diff có cùng PRN_1) và alpha_avg2 trên cùng 1 khung hình
-    cho từng offset. Điều này giúp so sánh trực quan chênh lệch góc giữa 2 phép tính.
+    cho từng offset. So sánh trực quan chênh lệch góc giữa 2 phép tính.
     """
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -1095,8 +1090,8 @@ def plot_alpha_offset_vs_avg2(merged_smoothed_data_double: pd.DataFrame, folder_
             plt.grid(True)
             plt.legend(fontsize=8, ncol=2)
 
-            # Đường phân chia góc phần tư (tuỳ chọn)
-            for thresh in [90, 180, 270]:
+            # Đường phân chia góc phần tư
+            for thresh in [90, 180]:
                 plt.axhline(y=thresh, color='r', linestyle='--', alpha=0.2)
 
             save_path = os.path.join(

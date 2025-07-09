@@ -11,7 +11,7 @@ Công cụ phân tích tín hiệu GNSS và phát hiện spoofing sử dụng ph
 
 1. Clone repository này về máy local của bạn:
 ```bash
-git clone [URL_REPOSITORY]
+git clone https://github.com/seapea2611/gnss_spoofing.git
 cd GNSS_DOA_Spoofing
 ```
 
